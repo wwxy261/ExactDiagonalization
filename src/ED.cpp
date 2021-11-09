@@ -49,12 +49,12 @@ struct EigVal {
     Eigen::VectorXcd EigenVec;
 };
 
-
 const int L = 12;
 const int Nup = 6;
 const int Ndown = 6;
 const double U = 10.0;
 const double t = -2;
+Hoppings hoppings;
 
 int numberOf1(u_int32_t n) {
     int cnt = 0;
@@ -63,14 +63,6 @@ int numberOf1(u_int32_t n) {
         n &= (n - 1);
     }
     return cnt;
-}
-
-uint32_t factorial(uint32_t n) {
-    uint32_t res = 1;
-    while (n != 0) {
-        res *= (n--);
-    }
-    return res;
 }
 
 Hoppings getNNHoppings1D(int n) {
@@ -85,19 +77,21 @@ Hoppings getNNHoppings1D(int n) {
     return hoppings;
 }
 
-Uint32Array getStateWithFixSpinNumber(u_int32_t n) {
-    Uint32Array states;
-    states.reserve(1 << L);
-    for (unsigned int i = 0; i < (1 << L); i++) {
-        if (numberOf1(i) == n) {
-            states.emplace_back(i);
+ Uint32Array getStatesFixSz(int nUp, int nDown) {
+    auto getStatesFixNum = [](u_int32_t n) {
+        Uint32Array states;
+        states.reserve(1 << L);
+        for (unsigned int i = 0; i < (1 << L); i++) {
+            if (numberOf1(i) == n) {
+                states.emplace_back(i);
+            }
         }
-    }
-    return states;
-}
+        return states;  
+    };
 
-Uint32Array getStateWithFixNumber(Uint32Array& spinUpStates, Uint32Array& spinDownStates) {
     Uint32Array states;
+    Uint32Array spinUpStates = getStatesFixNum(nUp);
+    Uint32Array spinDownStates = getStatesFixNum(nDown);
     states.reserve(1 << L);
     for (auto spinUpState : spinUpStates) {
         for (auto spinDownState : spinDownStates) {
@@ -107,7 +101,7 @@ Uint32Array getStateWithFixNumber(Uint32Array& spinUpStates, Uint32Array& spinDo
     return states;
 }
 
-StateIdxMap getStateIdxMap(Uint32Array states) {
+StateIdxMap getStateIdxMap(Uint32Array& states) {
     StateIdxMap stateIdxMap;
     stateIdxMap.reserve(1 << L);
     for (u_int32_t i = 0; i < states.size(); i++) {
@@ -147,7 +141,6 @@ SparseMat Hamiltonian(Uint32Array& states, StateIdxMap& stateIdxMap, std::vector
     H.setFromTriplets(tripletList.begin(), tripletList.end());
     return H;
 }
-
 
 void printTimeCost(std::string taskName, time_point t0, time_point t1) {
     std::chrono::microseconds duration = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0);
@@ -219,9 +212,7 @@ int main()
     std::cout <<"Start Constructing State" << std::endl;
     time_point t0 = std::chrono::system_clock::now();
 
-    Uint32Array spinUPStates = getStateWithFixSpinNumber(Nup);
-    Uint32Array spinDownStates = getStateWithFixSpinNumber(Ndown);
-    Uint32Array states = getStateWithFixNumber(spinUPStates, spinDownStates);
+    Uint32Array states = getStatesFixSz(Nup, Ndown);
     StateIdxMap statesIdxMap = getStateIdxMap(states);
 
     time_point t1 = std::chrono::system_clock::now();
@@ -231,7 +222,7 @@ int main()
     std::cout << "-----------------------------" << std::endl;
     
     // Add hopping in real space
-    Hoppings hoppings = getNNHoppings1D(L);
+    hoppings = getNNHoppings1D(L);
 
     // Constructing Hamiltonian
     std::cout << "Start Constructing Hamiltonian" << std::endl;
@@ -268,6 +259,8 @@ int main()
     t1 = std::chrono::system_clock::now();
     std::cout << "Ground Energy: " << GEnergy << std::endl;
     printTimeCost("GS Solve", t0, t1);
+
+
 }
 
 
