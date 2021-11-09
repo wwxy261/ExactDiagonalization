@@ -15,25 +15,40 @@
 
 #include "Eigen/Core"
 #include "Eigen/SparseCore"
+#include "Eigen/Dense"
 typedef Eigen::SparseMatrix<double> SparseMat; 
+typedef Eigen::SparseVector<double> SparseVec;
 typedef Eigen::Triplet<double> T;
 
-#ifdef ARPACK
+#ifdef _ARPACK
 #include "unsupported/Eigen/ArpackSupport"
 typedef Eigen::SimplicialLDLT<SparseMat> SparseChol;
 typedef Eigen::ArpackGeneralizedSelfAdjointEigenSolver <SparseMat, SparseChol> Arpack;
-#else
-#define SPECTRA
+
+#elif defined(SPECTRA)
 #include "Spectra/SymEigsSolver.h"
 #include "Spectra/MatOp/SparseSymMatProd.h"
 using namespace Spectra;
 #endif
 
-typedef std::tuple<u_int32_t, u_int32_t, double> Hopping;
-typedef std::vector<Hopping> Hoppings;
-typedef std::unordered_map<u_int32_t, u_int32_t> StateIdxMap;
+// System
 typedef std::vector<u_int32_t> Uint32Array;
 typedef std::chrono::system_clock::time_point time_point;
+
+// Hopping 
+// (idx of siteA, idx of siteB, value of hopping)
+typedef std::tuple<u_int32_t, u_int32_t, double> Hopping;
+typedef std::vector<Hopping> Hoppings;
+
+// index of state Map
+typedef std::unordered_map<u_int32_t, u_int32_t> StateIdxMap;
+
+// EigenValue and its corresponding EigenVector
+struct EigVal {
+    double EigenVal;
+    Eigen::VectorXcd EigenVec;
+};
+
 
 const int L = 12;
 const int Nup = 6;
@@ -140,6 +155,63 @@ void printTimeCost(std::string taskName, time_point t0, time_point t1) {
     std::cout << taskName << " Time Cost: " << second << " seconds." << std::endl;
 }
 
+EigVal GSLanczos(SparseMat &H, const u_int32_t size, const double eps = 1e-4, const int maxStep = 1000, const int K = 30) {
+
+    std::vector<double> Kdiag;
+    Kdiag.reserve(maxStep);
+    std::vector<double> Ksub;
+    Ksub.reserve(maxStep);
+
+    double minValue = 0;
+    double lastValue = 0;
+    Eigen::VectorXcd KEigVec;   
+
+    Eigen::VectorXcd f0 = Eigen::VectorXcd::Random(size);
+    f0 /= f0.norm();
+    Eigen::VectorXcd psi0 = f0;
+    Eigen::VectorXcd f1 = H * f0;
+    int step = 0;
+    for (step = 0; step < maxStep; step++ ) {
+        double a = f0.dot(f1).real();
+        f1 = f1 - a * f0;
+        double b = f1.norm();
+        f1 = f1 / b;
+
+        Eigen::VectorXcd tmp = f0;
+        f0 = f1;
+        f1 = H * f1 - b * tmp;
+        Kdiag.push_back(a);
+
+        if (step > K) {
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigensolver;
+            eigensolver.computeFromTridiagonal(Eigen::Map<Eigen::VectorXd>(Kdiag.data(), step), Eigen::Map<Eigen::VectorXd>(Ksub.data(), step - 1));
+            minValue = eigensolver.eigenvalues()[0];
+            if (abs(minValue - lastValue) < eps) {
+                KEigVec = eigensolver.eigenvectors().col(0);
+                break;
+            }
+            lastValue = minValue;
+        }
+        Ksub.push_back(b);
+    }
+    
+    f0 = psi0;
+    Eigen::VectorXcd groundState = KEigVec[0] * f0;
+    f1 = H * f0;
+    int m = KEigVec.rows();
+    for (int i = 1; i < m; i++) {
+        double a = f0.dot(f1).real();
+        f1 = f1 - a * f0;
+        double b = f1.norm();
+        f1 = f1 / b;
+        groundState += KEigVec[i] * f1;
+
+        Eigen::VectorXcd tmp = f0;
+        f0 = f1;
+        f1 = H * f1 - b * tmp;
+    }
+    return {minValue, f0};
+}
 
 int main()
 {
@@ -170,26 +242,32 @@ int main()
     std::cout << "-----------------------------" << std::endl;
 
     // Solve Ground State of Hamiltonian
-    std::cout << "Start Solve Eigenvalue" << std::endl;
+    std::cout << "Start Solve GS of Hamiltonian" << std::endl;
     t0 = std::chrono::system_clock::now();
-    Eigen::VectorXd evalues;
+    double GEnergy = 0;
+    Eigen::VectorXcd GState;
 
-    #ifdef ARPACK
+    #ifdef _ARPACK
     Arpack arpack;
     arpack.compute(H, 1, "SM");
-    evalues = arpack.eigenvalues();
-    #else
+    GEnergy = arpack.eigenvalues()[0];
+
+    #elif defined(SPECTRA)
     SparseSymMatProd<double> op(H);
     SymEigsSolver<SparseSymMatProd<double>> eigs(op, 1, 4);
     eigs.init();
     int nconv = eigs.compute(SortRule::SmallestAlge);
     if (eigs.info() == CompInfo::Successful) {
-        evalues = eigs.eigenvalues();
+        GEnergy = eigs.eigenvalues()[0];
     }
+    #else
+    EigVal eigVal = GSLanczos(H, states.size());
+    GEnergy = eigVal.EigenVal;
+    GState = eigVal.EigenVec;
     #endif
     t1 = std::chrono::system_clock::now();
-    std::cout << "Eigenvalues: " << evalues << std::endl;
-    printTimeCost("Eig", t0, t1);
+    std::cout << "Ground Energy: " << GEnergy << std::endl;
+    printTimeCost("GS Solve", t0, t1);
 }
 
 
